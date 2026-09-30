@@ -1,0 +1,6 @@
+# Python packages used by Karaoke Studio (ffmpeg is installed separately by Setup.bat)
+pygame
+yt-dlp[default]
+# optional, for Auto-sync:
+# stable-ts
+# demucs

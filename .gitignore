@@ -1,0 +1,17 @@
+# Your media and generated files stay on your PC
+songs/
+videos/
+models/
+Songs_Samples/
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.mp4
+*.mkv
+*.webm
+*_karaoke.lrc
+# logs / caches
+*.log
+__pycache__/
+*.pyc

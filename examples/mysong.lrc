@@ -1,0 +1,12 @@
+# TEMPLATE — replace these lines with your song. Save as UTF-8.
+# Put the song audio next to this file with the same name (mysong.mp3).
+# M = male, F = female, D = both. {F} switches singer mid-line.
+# An empty [time] ends the previous line (use before music breaks).
+title: Song Name
+artist: Singers
+
+[00:10.00] M: first line the male singer sings
+[00:14.00] F: next line the female singer sings
+[00:18.00] D: a line both sing together
+[00:22.00] M: he starts here {F} and she continues
+[00:26.00]
