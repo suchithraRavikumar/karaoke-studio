@@ -109,3 +109,9 @@ The output (H.264 1080p30, AAC 192k, faststart) matches YouTube's recommended se
 ## Customising
 
 Edit the block at the top of `karaoke.py`: `SINGER_COLORS`, `FONT`, `CUR_SIZE`/`NEXT_SIZE`, `SLOT_Y` (line positions), `PREVIEW_ALPHA` (brightness of upcoming lines), `DEFAULT_BG`.
+
+## License
+
+Copyright 2026 Suchithra Ravikumar
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
