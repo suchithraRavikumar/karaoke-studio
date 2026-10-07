@@ -58,6 +58,15 @@ PREVIEW_ALPHA = "20"           # hex transparency for upcoming lines (00 opaque 
 MAX_TEXT_W = 1720              # shrink long lines to fit this width (px)
 DEFAULT_BG = "#12122A"
 
+# Lyric layout:
+#   "classic"   — every line keeps its own row and never moves; when a line is finished,
+#                 only its row changes (to the line after next). Current + next 2 always visible.
+#   "scrolling" — current line on top, the next two below; everything shifts up each line.
+LYRIC_STYLE = "classic"
+CLASSIC_ROWS_Y = [640, 765, 890]   # vertical centre of the three fixed rows
+CLASSIC_SIZE = 74                  # font size of every row (shrinks only for very long lines)
+BAND = True                        # soft dark band behind the lyrics for readability
+
 TS = r"(\d+):(\d+(?:\.\d+)?)"
 
 
@@ -188,10 +197,17 @@ def fit_size(words, base):
     return base if est <= MAX_TEXT_W else max(28, int(base * MAX_TEXT_W / est))
 
 
-def current_line_text(ln, state_start):
+def current_line_text(ln, state_start, y=None, base_size=None, marker=False, fade=None):
     """Karaoke line: words wipe from white to the singer colour."""
-    size = fit_size(ln["words"], CUR_SIZE)
-    parts = [f"{{\\an5\\pos({W // 2},{SLOT_Y[0]})\\fs{size}\\2c{ass_color(UNSUNG)}}}"]
+    size = fit_size(ln["words"], base_size or CUR_SIZE)
+    y = SLOT_Y[0] if y is None else y
+    head = f"\\an5\\pos({W // 2},{y})\\fs{size}\\2c{ass_color(UNSUNG)}"
+    if fade:
+        head += f"\\fad({fade[0]},{fade[1]})"
+    parts = ["{" + head + "}"]
+    if marker:   # coloured dot = who sings this line (shown before it is sung)
+        c = SINGER_COLORS[ln["words"][0]["singer"]]
+        parts.append(f"{{\\1c{ass_color(c)}\\fscx70\\fscy70}}● {{\\fscx100\\fscy100}}")
     lead = round((ln["words"][0]["t"] - state_start) * 100)
     if lead > 0:
         parts.append(f"{{\\k{lead}}}")
@@ -251,7 +267,7 @@ def build_ass(meta, lines, duration):
            + (f"\\N{{\\fs52\\alpha&H40&}}{esc(artist)}" if artist else ""))
 
     # Countdown dots in the last 3 seconds before the first line
-    if first >= 3.0:
+    if first >= 3.0 and LYRIC_STYLE != "classic":
         for k in range(3):
             dots = " ".join(["●"] * (3 - k))
             ev(first - 3 + k, first - 2 + k, "Info",
@@ -261,6 +277,10 @@ def build_ass(meta, lines, duration):
     used = [s for s in "MFD" if any(w["singer"] == s for ln in lines for w in ln["words"])]
     legend = "   ".join(f"{{\\1c{ass_color(SINGER_COLORS[s])}}}● {{\\1c&HFFFFFF&}}{SINGER_NAMES[s]}" for s in used)
     ev(0, duration, "Info", f"{{\\an9\\pos({W - 50},40)\\fs34\\bord2}}{legend}", layer=1)
+
+    if LYRIC_STYLE == "classic":
+        _classic_events(lines, duration, intro_start, title_end, ev)
+        return "\n".join(out) + "\n"
 
     # Main lyric states: line i is "current", i+1 and i+2 are previews.
     for i, ln in enumerate(lines):
@@ -282,6 +302,52 @@ def build_ass(meta, lines, duration):
 # ----------------------------------------------------------------------------
 # Video rendering
 # ----------------------------------------------------------------------------
+def _classic_events(lines, duration, intro_start, title_end, ev):
+    """Fixed-row karaoke layout: line i lives in row i % 3 and never moves.
+    It appears when line i-2 starts (so the current line and the next two are always
+    visible) and leaves shortly after it has been sung, freeing its row for line i+3."""
+    n = len(lines)
+    rows = CLASSIC_ROWS_Y
+    starts = [ln["start"] for ln in lines]
+    ends = [ln["end"] for ln in lines]
+    show_from = max(0.0, title_end + 0.3) if title_end >= 1.5 else 0.0
+
+    appear, clear = [], []
+    for i in range(n):
+        a = show_from if i < 3 else starts[i - 2]
+        c = min(starts[i + 1], ends[i] + 2.0) if i + 1 < n else min(duration, ends[i] + 3.0)
+        c = max(c, ends[i])
+        appear.append(a)
+        clear.append(c)
+    for i in range(3, n):       # never overlap the previous occupant of the same row
+        appear[i] = max(appear[i], clear[i - 3])
+
+    # soft dark band behind the lyric rows
+    if BAND:
+        top, bot = rows[0] - 75, rows[-1] + 75
+        ev(show_from, min(duration, clear[-1] + 0.5), "Info",
+           f"{{\\an7\\pos(0,{top})\\p1\\bord0\\shad0\\blur18\\1c&H000000&\\alpha&H78&\\fad(500,500)}}"
+           f"m 0 0 l {W} 0 {W} {bot - top} 0 {bot - top}{{\\p0}}", layer=0)
+
+    for i, ln in enumerate(lines):
+        if clear[i] <= appear[i]:
+            continue
+        ev(appear[i], clear[i], "Lyric",
+           current_line_text(ln, appear[i], y=rows[i % 3], base_size=CLASSIC_SIZE, marker=True,
+                             fade=(200, 250)), layer=2)
+
+    # Countdown before the first line and after long instrumental breaks
+    for i in range(n):
+        gap_start = intro_start if i == 0 else ends[i - 1]
+        if starts[i] - gap_start < 4.0 or starts[i] < 3.0:
+            continue
+        col = ass_color(SINGER_COLORS[lines[i]["words"][0]["singer"]])
+        y = rows[i % 3] - 62
+        for k in range(3):
+            ev(starts[i] - 3 + k, starts[i] - 2 + k, "Info",
+               f"{{\\an5\\pos({W // 2},{y})\\fs30\\bord2\\1c{col}}}{' '.join(['●'] * (3 - k))}", layer=3)
+
+
 def probe_duration(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                         "-of", "json", path], capture_output=True, text=True)

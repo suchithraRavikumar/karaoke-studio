@@ -7,7 +7,7 @@ A Windows desktop app (Python + Tkinter + ffmpeg) for making karaoke videos with
 - Word-by-word colour wipe: **blue = male, pink = female, gold = both**, including singer switches mid-line
 - Current line plus the **next two lines** always on screen
 - Get the song's audio and cover image from a **YouTube link**, or use your own audio/video file
-- **✨ Auto-sync** lyrics to the song on your own PC (Whisper forced alignment via stable-ts), or tap along with Space, or open an existing synced `.lrc` / `.srt`
+- **🎤 Remove vocals (AI)** for a clean karaoke track (Demucs), and **✨ Auto-sync** lyrics to the song on your own PC (Whisper forced alignment via stable-ts), or tap along with Space, or open an existing synced `.lrc` / `.srt`
 - 1080p MP4 output ready for YouTube
 
 ![Karaoke Studio](docs/screenshot.png)
@@ -30,13 +30,23 @@ Turns a timed lyrics file + a song's audio into a 1080p MP4 ready for YouTube:
 4. **② Lyrics:** click *Paste lyrics…*, paste the song (one line per lyric line), choose who sings untagged lines, then *Replace all lines*.
 5. **Sync the lyrics** — three ways:
    - **Already-synced file:** if your lyrics file has times (`[00:12.34] …` — a synced `.lrc`, or an `.srt`), click **Open lyrics file…**. The times are kept, including word-level `<00:12.34>` times. Just set the singers.
-   - **✨ Auto-sync** (plain lyrics): click **✨ Auto-sync**. The app listens to the song and times every line *and every word*. It picks the language from your lyrics (Tamil, Hindi, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Urdu, English); choose *Better* accuracy and keep *Separate the singing from the music* ticked. First run it once: **`Setup AutoSync.bat`** (one-time, ~2–3 GB download; models are kept in the `models` folder). Afterwards, press Play and fix any line that's off.
+   - **✨ Auto-sync** (plain lyrics): click **✨ Auto-sync**. The app listens to the song and times every line *and every word*. It picks the language from your lyrics (Tamil, Hindi, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Urdu, English); choose *Better* accuracy and keep *Separate the singing from the music* ticked. First run it once: **`Setup AI Tools.bat`** (one-time, ~2–3 GB download; models are kept in the `models` folder). Afterwards, press Play and fix any line that's off.
    - **Tap by hand:** see below.
    **Tap to sync:** click the first line, press **Play**, and press **SPACE** the moment each line starts — the next line is selected automatically. Press **M / F / D** to set a line's singer (you can do this while it plays). Use the *−0.1 / +0.1* buttons next to Start to fine-tune, and *Play from line* to re-check a section. To switch singer mid-line, edit the line and type `{F}`, `{M}` or `{D}` where the switch happens.
 6. **③ Title & look:** title, artist, font (Nirmala UI covers all Indian scripts) and the three colours.
 7. **④ Make the video:** *Preview 20 s* renders a quick clip from the selected line; **Make karaoke video** renders the full MP4 with a progress bar. Your lyrics + timing are saved as a `.lrc` project next to the video — reopen it any time with *Open project…*.
 
 If a YouTube link stops working (YouTube changes often), run `Setup.bat` again — it updates the downloader. Only download videos you're allowed to use; karaoke uploads of commercial songs are best kept Private or Unlisted.
+
+- **Lyrics style** (step ③): *Classic* keeps every line in its own row — nothing scrolls; when a line is finished only its row changes, so the current line and the next two are always visible. *Scrolling* is the older moving layout.
+
+### Removing the singing (karaoke track)
+Click **🎤 Remove vocals (AI)** in section ① after loading the song. An AI model (Demucs) splits the song into
+*music only* and *vocals only* (a few minutes on a normal PC). Both are saved in the `songs` folder, and
+**Use the instrumental (no singing) in the video** switches on automatically. The app still plays the original
+while you time the lyrics, so you can hear the singers; *Preview 20 s* lets you hear the instrumental result.
+If the separated vocals exist, Auto-sync uses them too, which makes it faster and more accurate.
+First time only: run **`Setup AI Tools.bat`** (installs the vocal remover and Auto-sync, ~2–3 GB).
 
 Keyboard: `Space` tap · `M` `F` `D` singer · `P` play/pause · `←` `→` seek 2 s · `Delete` remove line · `Ctrl+S` save.
 

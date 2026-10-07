@@ -19,6 +19,10 @@ import json
 import os
 import sys
 
+# Newer PyTorch refuses to load the Demucs separator's model files by default (used when
+# "separate the singing" is on); they are the official research models, so allow it.
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+
 
 def say(kind, msg=""):
     print(f"{kind} {msg}".strip(), flush=True)
@@ -95,7 +99,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        code = main()
     except Exception as e:  # report cleanly to the app
         say("ERROR", f"{type(e).__name__}: {e}")
-        sys.exit(1)
+        code = 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code or 0)   # skip interpreter shutdown (PyTorch can crash there on some Windows setups)

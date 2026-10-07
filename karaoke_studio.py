@@ -24,7 +24,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.4"
+APP_VERSION = "1.6"
 DEBUG_LOG = os.path.join(HERE, "karaoke_studio_debug.log")
 
 
@@ -73,6 +73,7 @@ except Exception:
 
 SONGS_DIR = os.path.join(HERE, "songs")
 VIDEOS_DIR = os.path.join(HERE, "videos")
+STYLE_NAMES = {"classic": "Classic — lines stay in place", "scrolling": "Scrolling — lines move up"}
 YT_RE = re.compile(r"^(https?://)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/", re.I)
 
 try:
@@ -444,9 +445,13 @@ class Studio(tk.Tk):
         self.v_title = tk.StringVar()
         self.v_artist = tk.StringVar()
         self.v_font = tk.StringVar(value=karaoke.FONT)
+        self.v_style = tk.StringVar(value=STYLE_NAMES["classic"])
         self.v_out = tk.StringVar()
         self.v_vocals = tk.BooleanVar(value=False)
         self.v_blur = tk.BooleanVar(value=True)
+        self.v_inst = tk.StringVar()                       # instrumental (vocals removed) file
+        self.v_use_inst = tk.BooleanVar(value=False)       # use it in the video
+        self.v_inst_status = tk.StringVar(value="no instrumental yet")
         self.v_url = tk.StringVar()
         self.yt_busy = False
         self.v_status = tk.StringVar(value="Start by choosing the song, then paste the lyrics.")
@@ -580,10 +585,16 @@ class Studio(tk.Tk):
         self._file_row(s1, "Cover / background image or video (optional)", self.v_bg, self.pick_bg, clear=True)
         ttk.Checkbutton(s1, text="Blur the cover image (lyrics easier to read)",
                         variable=self.v_blur).pack(anchor="w")
-        ttk.Checkbutton(s1, text="Reduce vocals in the video (quick, rough)",
+        vr = ttk.Frame(s1)
+        vr.pack(fill="x", pady=(10, 0))
+        self.btn_sep = ttk.Button(vr, text="🎤 Remove vocals (AI)", style="Sync.TButton",
+                                  command=self.remove_vocals)
+        self.btn_sep.pack(side="left")
+        ttk.Label(vr, textvariable=self.v_inst_status, style="Muted.TLabel").pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(s1, text="Use the instrumental (no singing) in the video",
+                        variable=self.v_use_inst, command=self._inst_toggled).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(s1, text="Quick vocal cut instead (rough, no AI)",
                         variable=self.v_vocals).pack(anchor="w")
-        ttk.Label(s1, text="For clean karaoke use an instrumental track.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
 
         s2 = self._section(left, "Title & look", "3")
         s2.pack(fill="x", pady=(0, 10))
@@ -596,6 +607,10 @@ class Studio(tk.Tk):
         ttk.Label(g, text="Font", style="Muted.TLabel").grid(row=2, column=0, sticky="w", pady=3)
         cb = ttk.Combobox(g, textvariable=self.v_font, values=FONTS)
         cb.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=3)
+        ttk.Label(g, text="Lyrics", style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=3)
+        sc = ttk.Combobox(g, textvariable=self.v_style, values=list(STYLE_NAMES.values()), state="readonly")
+        sc.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=3)
+        sc.bind("<<ComboboxSelected>>", lambda e: (self._draw_preview(force=True), setattr(self, "dirty", True)))
         cb.bind("<<ComboboxSelected>>", lambda e: self._font_changed())
         cb.bind("<FocusOut>", lambda e: self._font_changed())
 
@@ -888,8 +903,8 @@ class Studio(tk.Tk):
         self.v_out.set(os.path.join(VIDEOS_DIR, base + "_karaoke.mp4"))
         self.v_url.set("")
         self.set_audio(audio)
-        self.status(f"Got “{title}” — audio{' + cover' if cover else ''} saved in the songs folder. "
-                    "Next: paste the lyrics.")
+        self.status(f"Got “{title}” — audio{' + cover' if cover else ''} saved. "
+                    "Next: click 🎤 Remove vocals, then paste the lyrics.")
 
     def _yt_fail(self, msg):
         self.yt_busy = False
@@ -907,6 +922,192 @@ class Studio(tk.Tk):
                     "then try once more.")
         messagebox.showerror("YouTube download failed", msg.strip()[-800:] + hint)
 
+    # ---------------------------------------------------------------- vocal removal
+    @staticmethod
+    def _stem_paths(audio):
+        base = os.path.splitext(os.path.basename(audio))[0]
+        base = re.sub(r"\s*\((instrumental|vocals)\)$", "", base)
+        return (os.path.join(SONGS_DIR, f"{base} (instrumental).mp3"),
+                os.path.join(SONGS_DIR, f"{base} (vocals).mp3"))
+
+    def _check_instrumental(self):
+        audio = self.v_audio.get().strip()
+        inst = self._stem_paths(audio)[0] if audio else ""
+        if inst and os.path.exists(inst) and os.path.abspath(inst) != os.path.abspath(audio):
+            self.v_inst.set(inst)
+            self.v_use_inst.set(True)
+            self.v_inst_status.set("✓ instrumental ready")
+        else:
+            self.v_inst.set("")
+            self.v_use_inst.set(False)
+            self.v_inst_status.set("singing still in the song")
+
+    def _inst_toggled(self):
+        if self.v_use_inst.get() and not (self.v_inst.get() and os.path.exists(self.v_inst.get())):
+            self.v_use_inst.set(False)
+            self.remove_vocals()
+
+    def _ai_installed(self, pkg):
+        import importlib.util
+        return importlib.util.find_spec(pkg) is not None
+
+    def _offer_ai_setup(self, what):
+        dlog(f"AI tools missing for {what}")
+        if messagebox.askyesno(
+                f"{what} needs a one-time install",
+                f"{what} uses AI models that run on your PC. They aren't installed yet.\n\n"
+                "Install them now? A black window will open and download about 2–3 GB "
+                "(10–30 minutes). When it says 'All done', close Karaoke Studio, open it again "
+                f"and click {what} again."):
+            bat = os.path.join(HERE, "Setup AI Tools.bat")
+            try:
+                if IS_WIN:
+                    os.startfile(bat)  # noqa
+                else:
+                    subprocess.Popen(["sh", bat])
+            except Exception as e:
+                messagebox.showerror(what, f"Couldn't start the installer:\n{e}\n\n"
+                                           f"Double-click 'Setup AI Tools.bat' in {HERE}")
+
+    def remove_vocals(self):
+        if getattr(self, "sep_running", False):
+            return
+        audio = self.v_audio.get().strip()
+        if not audio or not os.path.exists(audio):
+            messagebox.showinfo("Remove vocals", "Choose the song first (paste a YouTube link or Browse…).")
+            return
+        if not shutil.which("ffmpeg"):
+            messagebox.showerror("ffmpeg missing", "ffmpeg isn't installed. Run Setup.bat first.")
+            return
+        if not self._ai_installed("demucs"):
+            self._offer_ai_setup("Remove vocals")
+            return
+        inst, voc = self._stem_paths(audio)
+        os.makedirs(SONGS_DIR, exist_ok=True)
+        cmd = [self._python_exe(), os.path.join(HERE, "separate.py"), audio, "--inst", inst, "--vocals", voc,
+               "--models-dir", os.path.join(HERE, "models"), "--ffmpeg", shutil.which("ffmpeg")]
+        dlog(f"SEPARATE start {os.path.basename(audio)!r}")
+        self.sep_running = True
+        self.btn_sep.state(["disabled"])
+
+        def ok(elapsed):
+            self.sep_running = False
+            self.btn_sep.state(["!disabled"])
+            if not os.path.exists(inst):
+                fail("The separator finished but the instrumental file wasn't saved.", "")
+                return
+            dlog(f"SEPARATE ok {elapsed}s")
+            self._check_instrumental()
+            self.dirty = True
+            self.status("🎤 Vocals removed — the video will use the instrumental.")
+            messagebox.showinfo(
+                "Vocals removed",
+                "The instrumental (music only, no singing) is ready and saved in the songs folder.\n\n"
+                "Your karaoke video will now use it. The app still plays the original song while you "
+                "time the lyrics, so you can hear the singers. Use 'Preview 20 s' to hear the result.")
+
+        def fail(err, tail):
+            self.sep_running = False
+            self.btn_sep.state(["!disabled"])
+            dlog(f"SEPARATE failed err={err!r} tail={tail[-1500:]!r}")
+            if err == "Cancelled.":
+                self.status("Vocal removal cancelled.")
+                return
+            self.status("Vocal removal didn't finish.")
+            messagebox.showerror("Remove vocals", err or ("The vocal remover stopped unexpectedly.\n\n" + tail[-600:]))
+
+        self._run_worker("🎤 Removing vocals", cmd, ok, fail)
+
+    def _run_worker(self, title, cmd, on_ok, on_fail):
+        """Run a helper script (STAGE / ERROR / DONE protocol) with a progress window."""
+        w = tk.Toplevel(self)
+        w.title(title)
+        w.configure(bg=PANEL)
+        w.transient(self)
+        w.resizable(False, False)
+        fr = ttk.Frame(w, padding=18)
+        fr.pack(fill="both", expand=True)
+        v_stage = tk.StringVar(value="Starting…")
+        ttk.Label(fr, text=title, style="H.TLabel").pack(anchor="w")
+        ttk.Label(fr, textvariable=v_stage, style="Muted.TLabel", wraplength=440,
+                  justify="left").pack(anchor="w", pady=(6, 10))
+        bar = ttk.Progressbar(fr, mode="indeterminate", length=440, maximum=1000)
+        bar.pack(fill="x")
+        bar.start(12)
+        v_el = tk.StringVar(value="")
+        ttk.Label(fr, textvariable=v_el, style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+        t0 = time.time()
+        st = {"stage": "", "pct": None, "err": "", "done": False, "tail": "", "proc": None}
+
+        def cancel():
+            p = st["proc"]
+            if p and p.poll() is None:
+                p.kill()
+            st["err"] = st["err"] or "Cancelled."
+
+        ttk.Button(fr, text="Cancel", command=cancel).pack(anchor="e", pady=(12, 0))
+        w.protocol("WM_DELETE_WINDOW", cancel)
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        try:
+            st["proc"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                                          cwd=HERE, creationflags=NO_WINDOW)
+        except Exception as e:
+            w.destroy()
+            on_fail(f"Couldn't start: {e}", "")
+            return
+        proc = st["proc"]
+
+        def read_out():
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace").strip()
+                if line.startswith("STAGE "):
+                    st["stage"], st["pct"] = line[6:], None
+                elif line.startswith("ERROR "):
+                    st["err"] = line[6:]
+                elif line.startswith("DONE"):
+                    st["done"] = True
+
+        def read_err():
+            buf = b""
+            while True:
+                ch = proc.stderr.read(64)
+                if not ch:
+                    break
+                buf = (buf + ch)[-4000:]
+                txt = buf.decode("utf-8", "replace")
+                m = re.findall(r"(\d{1,3})%\|", txt)
+                if m:
+                    st["pct"] = min(100, int(m[-1]))
+                st["tail"] = txt
+
+        threading.Thread(target=read_out, daemon=True).start()
+        threading.Thread(target=read_err, daemon=True).start()
+
+        def poll():
+            if st["stage"]:
+                v_stage.set(st["stage"])
+            if st["pct"] is not None:
+                if str(bar.cget("mode")) != "determinate":
+                    bar.stop()
+                    bar.configure(mode="determinate")
+                bar["value"] = st["pct"] * 10
+            el = int(time.time() - t0)
+            v_el.set(f"{el // 60}:{el % 60:02d} elapsed" + (f" · {st['pct']}%" if st["pct"] is not None else ""))
+            if proc.poll() is None:
+                w.after(250, poll)
+                return
+            time.sleep(0.2)   # let the reader threads catch the last lines
+            bar.stop()
+            w.destroy()
+            if st["done"]:
+                on_ok(el)
+            else:
+                on_fail(st["err"], st["tail"])
+
+        w.after(250, poll)
+        self._center(w)
+        w.grab_set()
+
     def set_audio(self, p):
         self.v_audio.set(p)
         base = os.path.splitext(os.path.basename(p))[0]
@@ -922,6 +1123,7 @@ class Studio(tk.Tk):
             messagebox.showerror("Couldn't load the song", str(e))
             return
         self.seek.configure(to=max(1.0, self.player.duration))
+        self._check_instrumental()
         self.status(f"Song loaded ({fmt(self.player.duration)}). Next: paste the lyrics.")
         self.dirty = True
 
@@ -1219,7 +1421,7 @@ class Studio(tk.Tk):
                     "Install it now? A black window will open and download about 2–3 GB "
                     "(10–30 minutes). When it says 'All done', close Karaoke Studio, "
                     "open it again, and click Auto-sync."):
-                bat = os.path.join(HERE, "Setup AutoSync.bat")
+                bat = os.path.join(HERE, "Setup AI Tools.bat")
                 try:
                     if IS_WIN:
                         os.startfile(bat)  # noqa
@@ -1227,7 +1429,7 @@ class Studio(tk.Tk):
                         subprocess.Popen(["sh", bat])
                 except Exception as e:
                     messagebox.showerror("Auto-sync", f"Couldn't start the installer:\n{e}\n\n"
-                                                      f"Double-click 'Setup AutoSync.bat' in {HERE}")
+                                                      f"Double-click 'Setup AI Tools.bat' in {HERE}")
             return
         dlog(f"AUTOSYNC ready demucs={have_demucs}")
 
@@ -1271,7 +1473,7 @@ class Studio(tk.Tk):
         cb.pack(anchor="w", pady=(12, 0))
         if not have_demucs:
             cb.state(["disabled"])
-            ttk.Label(fr, text="(needs demucs — run 'Setup AutoSync.bat' again to add it)",
+            ttk.Label(fr, text="(needs demucs — run 'Setup AI Tools.bat' again to add it)",
                       style="Muted.TLabel").pack(anchor="w")
         ttk.Label(fr, text=f"{len(lines)} lines · song {fmt(self.player.duration)}. On a normal PC this takes "
                            "a few minutes; the first run also downloads the model.",
@@ -1299,6 +1501,9 @@ class Studio(tk.Tk):
 
     def _run_autosync(self, audio, lines, lang, model, vocals):
         import json
+        voc_stem = self._stem_paths(audio)[1]
+        if os.path.exists(voc_stem):      # vocals already separated: align on the clean voice (faster, better)
+            audio, vocals = voc_stem, False
         work = tempfile.mkdtemp(prefix="ksync_")
         lj = os.path.join(work, "lines.json")
         outj = os.path.join(work, "result.json")
@@ -1399,7 +1604,7 @@ class Studio(tk.Tk):
             bar.stop()
             w.destroy()
             self.btn_sync.state(["!disabled"])
-            if state["done"] and code == 0 and os.path.exists(outj):
+            if state["done"] and os.path.exists(outj):
                 with open(outj, encoding="utf-8") as f:
                     words = json.load(f).get("words", [])
                 dlog(f"AUTOSYNC ok words={len(words)} elapsed={int(time.time() - t0)}s")
@@ -1596,10 +1801,15 @@ class Studio(tk.Tk):
                 cur = i
         return cur
 
+    def _style_key(self):
+        v = self.v_style.get()
+        return next((k for k, n in STYLE_NAMES.items() if n == v), "classic")
+
     def _draw_preview(self, force=False):
         pos = self.player.position()
         cur = self._current_index(pos)
-        key = (cur, self.canvas.winfo_width(), self.v_font.get(), tuple(self.colors.values()), len(self.rows))
+        key = (cur, self.canvas.winfo_width(), self.v_font.get(), tuple(self.colors.values()), len(self.rows),
+               self.v_style.get())
         if not force and key == getattr(self, "_pv_key", None):
             return
         self._pv_key = key
@@ -1620,6 +1830,9 @@ class Studio(tk.Tk):
             if cur is not None and self.tree.exists(str(cur)):
                 self.tree.item(str(cur), tags=list(self.tree.item(str(cur), "tags")) + ["now"])
             self._now_row = cur
+        if self._style_key() == "classic":
+            self._draw_classic(c, w, font, cur)
+            return
         start = 0 if cur is None else cur
         shown = []
         i = start
@@ -1646,6 +1859,38 @@ class Studio(tk.Tk):
             c.create_oval(bx[0] - 14, 9, bx[0] - 4, 19, fill=self.colors[s], outline="")
             x = bx[0] - 24
 
+    def _draw_legend(self, c, w):
+        x = w - 12
+        for s_, n in reversed([("M", "Male"), ("F", "Female"), ("D", "Both")]):
+            t_id = c.create_text(x, 14, text=n, anchor="e", fill=TEXT, font=(self.base_font[0], 9))
+            bx = c.bbox(t_id)
+            c.create_oval(bx[0] - 14, 9, bx[0] - 4, 19, fill=self.colors[s_], outline="")
+            x = bx[0] - 24
+
+    def _draw_classic(self, c, w, font, cur):
+        """Same fixed-row layout as the video: sung lines keep their row, nothing scrolls."""
+        text_rows = [i for i, r in enumerate(self.rows) if r["text"]]
+        if cur is not None and not self.rows[cur]["text"]:      # in a music break: next line is up next
+            nxt = [k for k, i in enumerate(text_rows) if i > cur]
+            ci = nxt[0] if nxt else len(text_rows)
+            singing = False
+        else:
+            ci = text_rows.index(cur) if cur in text_rows else 0
+            singing = cur is not None
+        ys = (52, 98, 144)
+        c.create_rectangle(0, 28, w, 168, fill="#0D0D1C", outline="")
+        for j in range(ci, min(ci + 3, len(text_rows))):
+            r = self.rows[text_rows[j]]
+            text = re.sub(r"\s+", " ", re.sub(r"\{[MFD]\}", " ", r["text"])).strip()
+            y = ys[j % 3]
+            dot = self.colors[r["singer"]]
+            now = singing and j == ci
+            col = dot if now else "#FFFFFF"
+            t_id = c.create_text(w / 2 + 8, y, text=text, fill=col, font=(font, 17, "bold"), width=w - 60)
+            bx = c.bbox(t_id)
+            c.create_oval(bx[0] - 18, y - 5, bx[0] - 8, y + 5, fill=dot, outline="")
+        self._draw_legend(c, w)
+
     # ---------------------------------------------------------------- project I/O
     def to_lrc(self):
         out = []
@@ -1656,12 +1901,16 @@ class Studio(tk.Tk):
         if self.v_bg.get():
             out.append(f"background: {self.v_bg.get()}")
         out.append(f"font: {self.v_font.get()}")
+        out.append(f"style: {self._style_key()}")
         out.append("colors: " + ",".join(f"{s}={c}" for s, c in self.colors.items()))
         if self.v_out.get():
             out.append(f"output: {self.v_out.get()}")
         if self.v_vocals.get():
             out.append("reduce_vocals: yes")
         out.append(f"blur_cover: {'yes' if self.v_blur.get() else 'no'}")
+        if self.v_inst.get():
+            out.append(f"instrumental: {self.v_inst.get()}")
+        out.append(f"use_instrumental: {'yes' if self.v_use_inst.get() else 'no'}")
         out.append("")
         last_singer = None
         for r in self.rows:
@@ -1729,6 +1978,9 @@ class Studio(tk.Tk):
         for v in (self.v_audio, self.v_bg, self.v_title, self.v_artist, self.v_out):
             v.set("")
         self.v_vocals.set(False)
+        self.v_inst.set("")
+        self.v_use_inst.set(False)
+        self.v_inst_status.set("no instrumental yet")
         self.player.path = None
         self.player.duration = 0.0
         self.dirty = False
@@ -1755,6 +2007,9 @@ class Studio(tk.Tk):
         self.v_out.set(st.get("output", ""))
         self.v_vocals.set(st.get("reduce_vocals", "") == "yes")
         self.v_blur.set(st.get("blur_cover", "yes") != "no")
+        self._saved_inst = (st.get("instrumental", ""), st.get("use_instrumental", ""))
+        if st.get("style") in STYLE_NAMES:
+            self.v_style.set(STYLE_NAMES[st["style"]])
         if st.get("font"):
             self.v_font.set(st["font"])
             self._font_changed()
@@ -1775,6 +2030,11 @@ class Studio(tk.Tk):
                     break
         if audio and os.path.exists(audio):
             self.set_audio(audio)
+        inst, use = getattr(self, "_saved_inst", ("", ""))
+        if inst and os.path.exists(inst):
+            self.v_inst.set(inst)
+            self.v_inst_status.set("✓ instrumental ready")
+            self.v_use_inst.set(use != "no")
         self.dirty = False
         self.refresh([0])
         self.status(f"Opened {os.path.basename(p)} — {sum(1 for r in rows if r['text'])} lines.")
@@ -1828,6 +2088,7 @@ class Studio(tk.Tk):
                 "Some lines not timed", f"{untimed} line(s) have no start time and will be left out. Continue?"):
             return None
         karaoke.FONT = self.v_font.get().strip() or karaoke.FONT
+        karaoke.LYRIC_STYLE = self._style_key()
         karaoke.SINGER_COLORS.update(self.colors)
         tmp = tempfile.NamedTemporaryFile("w", suffix=".lrc", delete=False, encoding="utf-8")
         tmp.write(self.to_lrc())
@@ -1838,8 +2099,24 @@ class Studio(tk.Tk):
             os.unlink(tmp.name)
         duration = karaoke.probe_duration(audio) or (lines[-1]["end"] + 4)
         ass = karaoke.build_ass(meta, lines, duration)
-        return dict(ass=ass, audio=audio, bg=self.v_bg.get().strip() or None,
-                    duration=duration, vocals=self.v_vocals.get(), blur=self.v_blur.get())
+        video_audio, quick_cut = audio, self.v_vocals.get()
+        inst = self.v_inst.get().strip()
+        if self.v_use_inst.get() and inst and os.path.exists(inst):
+            video_audio, quick_cut = inst, False
+        elif not self.v_vocals.get():
+            ans = messagebox.askyesnocancel(
+                "Singing is still in the song",
+                "This song still has the singers' voices in it.\n\n"
+                "Yes = remove the vocals first (AI, a few minutes)\n"
+                "No = make the video with the original song anyway")
+            if ans is None:
+                return None
+            if ans:
+                self.remove_vocals()
+                return None
+        dlog(f"RENDER audio={'instrumental' if video_audio != audio else 'original'} quick_cut={quick_cut}")
+        return dict(ass=ass, audio=video_audio, bg=self.v_bg.get().strip() or None,
+                    duration=duration, vocals=quick_cut, blur=self.v_blur.get())
 
     def preview_clip(self):
         if self.busy:
